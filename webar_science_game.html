@@ -1,0 +1,1013 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>WebAR Science: ไฟฟ้าและพลังงาน (Versus Mode)</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- MediaPipe Hands API -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Prompt:wght@300;400;600;700&display=swap');
+        
+        body {
+            font-family: 'Prompt', sans-serif;
+            margin: 0;
+            overflow: hidden;
+            background-color: #0f172a;
+            color: white;
+            user-select: none;
+            touch-action: none;
+        }
+
+        #video-element {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            object-fit: cover;
+            transform: scaleX(-1); /* Mirror effect */
+            z-index: 0;
+            opacity: 0.5;
+        }
+
+        #game-canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            z-index: 10;
+        }
+
+        /* Glassmorphism effects */
+        .glass-panel {
+            background: rgba(15, 23, 42, 0.7);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.5);
+            border-radius: 1rem;
+        }
+
+        .glass-btn {
+            background: linear-gradient(135deg, rgba(56, 189, 248, 0.9), rgba(59, 130, 246, 0.9));
+            backdrop-filter: blur(4px);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            box-shadow: 0 4px 15px rgba(59, 130, 246, 0.4);
+            transition: all 0.2s ease;
+        }
+        
+        .glass-btn:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(56, 189, 248, 0.6);
+            background: linear-gradient(135deg, rgba(56, 189, 248, 1), rgba(59, 130, 246, 1));
+        }
+        
+        .glass-btn:disabled {
+            background: #475569;
+            box-shadow: none;
+            cursor: not-allowed;
+            opacity: 0.7;
+        }
+
+        .text-neon-blue { text-shadow: 0 0 10px rgba(56, 189, 248, 0.8), 0 0 20px rgba(59, 130, 246, 0.5); }
+        .text-neon-red { text-shadow: 0 0 10px rgba(244, 63, 94, 0.8), 0 0 20px rgba(225, 29, 72, 0.5); }
+
+        #ui-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 20;
+            pointer-events: none;
+        }
+        
+        .interactive-ui { pointer-events: auto; }
+
+        #hud {
+            position: absolute;
+            top: 1rem;
+            left: 1rem;
+            right: 1rem;
+            display: flex;
+            justify-content: space-between;
+            pointer-events: none;
+        }
+
+        .vs-divider {
+            position: absolute;
+            top: 0;
+            left: 50%;
+            width: 4px;
+            height: 100vh;
+            background: linear-gradient(to bottom, transparent, rgba(255,255,255,0.2), transparent);
+            transform: translateX(-50%);
+            z-index: 5;
+            pointer-events: none;
+        }
+
+        #dom-image-container {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            pointer-events: none;
+            z-index: 15; /* Between canvas and UI */
+        }
+    </style>
+</head>
+<body>
+    <!-- Native Video Element for Camera (More stable than MediaPipe's util) -->
+    <video id="video-element" autoplay playsinline></video>
+    
+    <!-- VS Line -->
+    <div id="vs-line" class="vs-divider hidden"></div>
+    
+    <!-- Game Canvas -->
+    <canvas id="game-canvas"></canvas>
+    
+    <!-- DOM Container for GIFs -->
+    <div id="dom-image-container"></div>
+
+    <div id="ui-layer">
+        
+        <!-- HUD (Score, Level, Status) -->
+        <div id="hud" class="hidden">
+            <!-- Player 1 Score -->
+            <div class="glass-panel px-6 py-2 flex flex-col items-center border-l-4 border-l-sky-400">
+                <span class="text-xs text-sky-300 font-bold">P1 (ซ้าย)</span>
+                <span id="score-p1" class="text-3xl font-bold text-neon-blue">0</span>
+            </div>
+            
+            <!-- Center Level Info -->
+            <div class="glass-panel px-6 py-2 flex flex-col items-center">
+                <span id="level-display" class="text-xl font-bold text-amber-300">ด่าน 1/3</span>
+                <span id="input-status" class="text-xs text-yellow-400 mt-1 drop-shadow-md">🟡 กำลังเตรียมกล้อง...</span>
+            </div>
+
+            <!-- Player 2 Score -->
+            <div class="glass-panel px-6 py-2 flex flex-col items-center border-r-4 border-r-rose-400">
+                <span class="text-xs text-rose-300 font-bold">P2 (ขวา)</span>
+                <span id="score-p2" class="text-3xl font-bold text-neon-red">0</span>
+            </div>
+        </div>
+
+        <!-- Pre-Game Screen -->
+        <div id="screen-intro" class="interactive-ui absolute inset-0 flex items-center justify-center bg-slate-900/80 backdrop-blur-sm transition-opacity duration-500">
+            <div class="glass-panel p-8 max-w-2xl w-full mx-4 flex flex-col items-center text-center shadow-[0_0_50px_rgba(56,189,248,0.2)]">
+                <div class="text-6xl mb-4">⚡</div>
+                <h1 class="text-4xl font-bold text-amber-400 mb-2 drop-shadow-md">โหมดดวลความรู้ (Versus)</h1>
+                <h2 class="text-xl text-sky-200 mb-6 drop-shadow-md">ไฟฟ้าและพลังงาน</h2>
+                
+                <div class="bg-slate-800/80 p-6 rounded-xl mb-8 text-left w-full border border-slate-500/50 shadow-inner">
+                    <h3 class="text-xl font-semibold text-white mb-3 text-center">🎮 วิธีการเล่น (แข่งกัน 2 คน)</h3>
+                    <div class="flex justify-between items-center bg-slate-900/50 p-4 rounded-lg mb-4">
+                        <div class="text-center w-1/2 border-r border-slate-600 pr-4">
+                            <span class="text-sky-400 font-bold text-lg drop-shadow-md">Player 1 (ซ้าย)</span>
+                            <p class="text-sm text-slate-300 mt-2">ใช้มือซ้าย หรือ เมาส์/แตะซีกซ้าย</p>
+                        </div>
+                        <div class="text-center w-1/2 pl-4">
+                            <span class="text-rose-400 font-bold text-lg drop-shadow-md">Player 2 (ขวา)</span>
+                            <p class="text-sm text-slate-300 mt-2">ใช้มือขวา หรือ เมาส์/แตะซีกขวา</p>
+                        </div>
+                    </div>
+                    <ul class="list-disc list-inside space-y-2 text-slate-200 text-sm md:text-base">
+                        <li>ทำท่า <b>"หนีบนิ้วชี้และนิ้วโป้ง"</b> หรือ <b>"คลิกเมาส์ค้าง"</b> เพื่อจับวัตถุ</li>
+                        <li>ลากวัตถุไปยังเป้าหมายที่ถูกต้องเพื่อทำคะแนน แข่งกับเพื่อน!</li>
+                    </ul>
+                </div>
+
+                <button id="btn-start" class="glass-btn px-10 py-4 rounded-full text-xl font-bold shadow-lg w-full md:w-auto" disabled>
+                    ⏳ กำลังโหลดรูปภาพ 0%...
+                </button>
+            </div>
+        </div>
+
+        <!-- Post-Level Knowledge Screen -->
+        <div id="screen-knowledge" class="interactive-ui absolute inset-0 flex items-center justify-center bg-slate-900/80 backdrop-blur-sm hidden">
+            <div class="glass-panel p-8 max-w-lg w-full mx-4 flex flex-col items-center text-center shadow-[0_0_30px_rgba(251,191,36,0.3)]">
+                <div id="kl-winner" class="text-2xl font-bold mb-4 px-6 py-2 rounded-full border-2 border-dashed shadow-md">
+                    P1 ชนะด่านนี้!
+                </div>
+                <h2 id="kl-title" class="text-2xl font-bold text-amber-300 mb-3 drop-shadow-md">สรุปความรู้</h2>
+                <div id="kl-content" class="text-slate-200 mb-8 text-base bg-slate-800/80 p-5 rounded-xl w-full shadow-inner leading-relaxed">
+                    เนื้อหาสรุป...
+                </div>
+                <button id="btn-next-level" class="glass-btn px-8 py-3 rounded-full text-lg font-bold w-full shadow-md">
+                    ดวลต่อด่านถัดไป ➡️
+                </button>
+            </div>
+        </div>
+
+        <!-- Victory Screen -->
+        <div id="screen-victory" class="interactive-ui absolute inset-0 flex items-center justify-center bg-slate-900/90 backdrop-blur-md hidden">
+            <div class="glass-panel p-10 max-w-2xl w-full mx-4 flex flex-col items-center text-center shadow-[0_0_60px_rgba(250,204,21,0.4)]">
+                <div class="text-7xl mb-4 animate-bounce">👑</div>
+                <h1 id="final-winner-text" class="text-5xl font-bold mb-6 drop-shadow-lg text-amber-400">Player 1 คือผู้ชนะ!</h1>
+                
+                <div class="flex justify-center gap-8 w-full mb-10">
+                    <!-- P1 Final Score -->
+                    <div class="bg-slate-800/80 p-6 rounded-xl border-4 border-sky-500 w-40 flex flex-col items-center relative overflow-hidden shadow-[0_0_20px_rgba(56,189,248,0.4)]">
+                        <div id="p1-crown" class="absolute -top-3 -right-3 text-4xl hidden">👑</div>
+                        <div class="text-sky-300 font-bold mb-2 text-lg">P1 Score</div>
+                        <div id="final-score-p1" class="text-5xl font-bold text-white drop-shadow-md">0</div>
+                    </div>
+                    
+                    <div class="flex items-center text-4xl font-bold text-slate-500">VS</div>
+
+                    <!-- P2 Final Score -->
+                    <div class="bg-slate-800/80 p-6 rounded-xl border-4 border-rose-500 w-40 flex flex-col items-center relative overflow-hidden shadow-[0_0_20px_rgba(244,63,94,0.4)]">
+                        <div id="p2-crown" class="absolute -top-3 -right-3 text-4xl hidden">👑</div>
+                        <div class="text-rose-300 font-bold mb-2 text-lg">P2 Score</div>
+                        <div id="final-score-p2" class="text-5xl font-bold text-white drop-shadow-md">0</div>
+                    </div>
+                </div>
+
+                <button id="btn-restart" class="glass-btn px-10 py-4 rounded-full text-xl font-bold w-full md:w-auto shadow-lg">
+                    🔄 รีแมตช์ (Rematch)
+                </button>
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+        // ==========================================
+        // 1. Audio Engine (Web Audio API)
+        // ==========================================
+        class AudioEngine {
+            constructor() {
+                this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+                this.initialized = false;
+            }
+            init() { if (!this.initialized) { this.ctx.resume(); this.initialized = true; } }
+            playTone(freq, type, duration, vol = 0.1) {
+                if (!this.initialized) return;
+                const osc = this.ctx.createOscillator();
+                const gain = this.ctx.createGain();
+                osc.type = type; osc.frequency.setValueAtTime(freq, this.ctx.currentTime);
+                gain.gain.setValueAtTime(vol, this.ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + duration);
+                osc.connect(gain); gain.connect(this.ctx.destination);
+                osc.start(); osc.stop(this.ctx.currentTime + duration);
+            }
+            playClick() { this.playTone(600, 'sine', 0.1, 0.05); }
+            playGrab() { this.playTone(400, 'triangle', 0.1, 0.05); }
+            playDrop() { this.playTone(300, 'triangle', 0.1, 0.05); }
+            playCorrect() {
+                this.playTone(523.25, 'sine', 0.15, 0.1); 
+                setTimeout(() => this.playTone(783.99, 'sine', 0.25, 0.1), 100); 
+            }
+            playWrong() { this.playTone(150, 'sawtooth', 0.3, 0.1); }
+            playVictory() {
+                [523.25, 659.25, 783.99, 1046.50].forEach((freq, i) => {
+                    setTimeout(() => this.playTone(freq, 'square', 0.2, 0.1), i * 150);
+                });
+            }
+        }
+        const audio = new AudioEngine();
+
+        // ==========================================
+        // 2. Image Assets & Preloader
+        // ==========================================
+        const IMAGE_URLS = {
+            windTurbine: 'https://lh3.googleusercontent.com/d/1upcMVwGK5KS5Skrdaa-v9WbTYiadOT5e',
+            hydroDam: 'https://lh3.googleusercontent.com/d/1oWzNCM0R7dZMfhr8ZXPsbfShu2N6kUl4',
+            nail: 'https://lh3.googleusercontent.com/d/1PkjnkKJVOJTTaiMA2_gkY-bBZjc2fRb1',
+            spoon: 'https://lh3.googleusercontent.com/d/1HaDSp_Lpt2cgUC5vqsor09-JZ4NkVAd7',
+            insulatorBin: 'https://lh3.googleusercontent.com/d/1ZJeDxg3-oTMfd70fgU0tP2Zg8glJOyPf',
+            conductorBin: 'https://lh3.googleusercontent.com/d/15kqJ_5w9PfDdt4H7IvtvOhe_FjxZAFBJ',
+            solarPanel: 'https://lh3.googleusercontent.com/d/1NaB1xr_8-XnaEWYOLlv8IrEHgvZxTyTQ',
+            battery: 'https://lh3.googleusercontent.com/d/1fvv_u2bMPjM3ZA2iDGkk3wzWB168my67',
+            water: 'https://lh3.googleusercontent.com/d/1MsxRKE_zJKgP8FOTd5n-yVm6lshejFwB',
+            wood: 'https://lh3.googleusercontent.com/d/13SIdoAlVCIWZJqS4Cq7tc5CBuXfV2V2Y',
+            ruler: 'https://lh3.googleusercontent.com/d/1hPBqOYEpEOddkD5sPf8gXLyImZTU0YLD',
+            wire: 'https://lh3.googleusercontent.com/d/1wPD6u8CG3XY-NoIFJBQENGeh3w_nhktn',
+            switch: 'https://lh3.googleusercontent.com/d/1m1UWSr4ws98OADW8VhZHsExu4m9uCDgO',
+            wind: 'https://lh3.googleusercontent.com/d/1KsEkDRXfIEUHQlEehx-SGfBtwF3XAEi9',
+            eraser: 'https://lh3.googleusercontent.com/d/1kwYOA5feLUg1OINnj_yqWTwGti4DtQsF',
+            key: 'https://lh3.googleusercontent.com/d/1ZCVWHItpIqTMFhzVSNvblMGB_fbUf7X7',
+            balloon: 'https://lh3.googleusercontent.com/d/1tdqGBMIc4t-5Kk6ICoYbBAi95-oftMZD',
+            lightbulb: 'https://lh3.googleusercontent.com/d/1w-bgaoeoPgLXO5iNELejAH9CuV7c9_-A',
+            sun: 'https://lh3.googleusercontent.com/d/1zVCS72ODjy1_WUcaCoUZ2BTW1OMap717'
+        };
+
+        let imagesLoadedCount = 0;
+        const totalImages = Object.keys(IMAGE_URLS).length;
+        const btnStart = document.getElementById('btn-start');
+        
+        // DOM Elements container for displaying GIFs properly
+        const domImageContainer = document.getElementById('dom-image-container');
+        const domImageElements = {};
+
+        function updateLoadingProgress() {
+            imagesLoadedCount++;
+            const percent = Math.floor((imagesLoadedCount / totalImages) * 100);
+            if (imagesLoadedCount < totalImages) {
+                btnStart.innerText = `⏳ กำลังโหลดรูปภาพ ${percent}%...`;
+            } else {
+                btnStart.disabled = false;
+                btnStart.innerText = 'พร้อมลุย! 🚀';
+            }
+        }
+
+        // Preload images into browser cache
+        for (let key in IMAGE_URLS) {
+            const img = new Image();
+            img.crossOrigin = "anonymous";
+            img.onload = updateLoadingProgress;
+            img.onerror = () => { console.warn(`Failed: ${IMAGE_URLS[key]}`); updateLoadingProgress(); };
+            img.src = IMAGE_URLS[key];
+        }
+
+        function clearDOMImages() {
+            domImageContainer.innerHTML = '';
+            for (let key in domImageElements) delete domImageElements[key];
+        }
+
+        function getOrCreateDOMImage(id, imgKey, size) {
+             if (!domImageElements[id]) {
+                 const imgEl = document.createElement('img');
+                 imgEl.src = IMAGE_URLS[imgKey];
+                 imgEl.style.position = 'absolute';
+                 imgEl.style.width = `${size}px`;
+                 imgEl.style.height = `${size}px`;
+                 imgEl.style.transform = 'translate(-50%, -50%)'; // Center Origin
+                 imgEl.style.objectFit = 'contain';
+                 domImageContainer.appendChild(imgEl);
+                 domImageElements[id] = imgEl;
+             }
+             return domImageElements[id];
+        }
+
+        // ==========================================
+        // 3. State Management
+        // ==========================================
+        const state = {
+            isPlaying: false,
+            currentLevelIdx: 0,
+            scores: { 1: 0, 2: 0 },
+            cursors: [
+                { id: 1, owner: 1, x: 0, y: 0, isPinching: false, wasPinching: false, active: false, source: 'none', grabbedItem: null, grabOffset: {x:0, y:0}, color: '#38bdf8' },
+                { id: 2, owner: 2, x: 0, y: 0, isPinching: false, wasPinching: false, active: false, source: 'none', grabbedItem: null, grabOffset: {x:0, y:0}, color: '#fb7185' }
+            ],
+            items: [], targets: [], statics: [],
+            width: window.innerWidth, height: window.innerHeight, baseRadius: 0
+        };
+
+        const canvas = document.getElementById('game-canvas');
+        const ctx = canvas.getContext('2d', { alpha: true });
+
+        function resizeCanvas() {
+            canvas.width = window.innerWidth; canvas.height = window.innerHeight;
+            state.width = canvas.width; state.height = canvas.height;
+            state.baseRadius = Math.max(30, Math.min(60, canvas.width * 0.04));
+        }
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+
+        // Helper: Shuffle array for random positions
+        function shuffleArray(array) {
+            let cur = array.length, rand;
+            while (cur != 0) {
+                rand = Math.floor(Math.random() * cur); cur--;
+                [array[cur], array[rand]] = [array[rand], array[cur]];
+            }
+            return array;
+        }
+
+        // ==========================================
+        // 4. Level Data (Versus Mode)
+        // ==========================================
+        const VS_LEVELS = [
+            { // Level 1
+                instruction: "ด่าน 1: แข่งกันต่อวงจรไฟฟ้าให้หลอดไฟสว่าง!",
+                knowledge: {
+                    title: "วงจรไฟฟ้าอย่างง่าย",
+                    content: "ประกอบด้วย แหล่งกำเนิดไฟฟ้า(แบตเตอรี่) ตัวนำ(สายไฟ) และอุปกรณ์(หลอดไฟ) กระแสไฟจะไหลครบวงจรเมื่อปิดสวิตช์"
+                },
+                setup: () => {
+                    const t = [
+                        { id: 't1_wire', rx: 0.35, ry: 0.6, owner: 1, type: 'wire', imgKey: 'wire' },
+                        { id: 't1_switch', rx: 0.15, ry: 0.6, owner: 1, type: 'switch', imgKey: 'switch' },
+                        { id: 't2_wire', rx: 0.65, ry: 0.6, owner: 2, type: 'wire', imgKey: 'wire' },
+                        { id: 't2_switch', rx: 0.85, ry: 0.6, owner: 2, type: 'switch', imgKey: 'switch' }
+                    ];
+                    // Randomize item spawn points
+                    const p1Slots = shuffleArray([{rx: 0.2, ry: 0.8}, {rx: 0.3, ry: 0.8}]);
+                    const p2Slots = shuffleArray([{rx: 0.7, ry: 0.8}, {rx: 0.8, ry: 0.8}]);
+                    const i = [
+                        { id: 'i1_wire', rx: p1Slots[0].rx, ry: p1Slots[0].ry, owner: 1, type: 'wire', label: 'สายไฟ', imgKey: 'wire' },
+                        { id: 'i1_switch', rx: p1Slots[1].rx, ry: p1Slots[1].ry, owner: 1, type: 'switch', label: 'สวิตช์', imgKey: 'switch' },
+                        { id: 'i2_wire', rx: p2Slots[0].rx, ry: p2Slots[0].ry, owner: 2, type: 'wire', label: 'สายไฟ', imgKey: 'wire' },
+                        { id: 'i2_switch', rx: p2Slots[1].rx, ry: p2Slots[1].ry, owner: 2, type: 'switch', label: 'สวิตช์', imgKey: 'switch' }
+                    ];
+                    const s = [
+                        { id: 'b1', rx: 0.25, ry: 0.4, owner: 1, imgKey: 'battery' },
+                        { id: 'bulb_1', rx: 0.25, ry: 0.2, owner: 1, imgKey: 'lightbulb' },
+                        { id: 'b2', rx: 0.75, ry: 0.4, owner: 2, imgKey: 'battery' },
+                        { id: 'bulb_2', rx: 0.75, ry: 0.2, owner: 2, imgKey: 'lightbulb' }
+                    ];
+                    return { targets: t, items: i, statics: s };
+                }
+            },
+            { // Level 2
+                instruction: "ด่าน 2: แข่งกันแยกขยะให้ถูกต้อง! (ตัวนำ และ ฉนวน)",
+                knowledge: {
+                    title: "ตัวนำและฉนวนไฟฟ้า",
+                    content: "ตัวนำไฟฟ้า (เช่น โลหะ ช้อน ตะปู) ยอมให้ไฟผ่านได้ดี ฉนวนไฟฟ้า (เช่น ไม้ พลาสติก ยาง) ไฟผ่านไม่ได้"
+                },
+                setup: () => {
+                    const t = [
+                        // P1 Bins
+                        { id: 'bin_cond_1', rx: 0.15, ry: 0.75, owner: 1, type: 'conductor', isBin: true, imgKey: 'conductorBin', label: 'ตัวนำ', color: '#38bdf8' },
+                        { id: 'bin_ins_1', rx: 0.35, ry: 0.75, owner: 1, type: 'insulator', isBin: true, imgKey: 'insulatorBin', label: 'ฉนวน', color: '#38bdf8' },
+                        // P2 Bins
+                        { id: 'bin_cond_2', rx: 0.65, ry: 0.75, owner: 2, type: 'conductor', isBin: true, imgKey: 'conductorBin', label: 'ตัวนำ', color: '#fb7185' },
+                        { id: 'bin_ins_2', rx: 0.85, ry: 0.75, owner: 2, type: 'insulator', isBin: true, imgKey: 'insulatorBin', label: 'ฉนวน', color: '#fb7185' }
+                    ];
+                    
+                    const p1Slots = shuffleArray([
+                        {rx: 0.15, ry: 0.3}, {rx: 0.35, ry: 0.3},
+                        {rx: 0.15, ry: 0.5}, {rx: 0.35, ry: 0.5}
+                    ]);
+                    const p2Slots = shuffleArray([
+                        {rx: 0.65, ry: 0.3}, {rx: 0.85, ry: 0.3},
+                        {rx: 0.65, ry: 0.5}, {rx: 0.85, ry: 0.5}
+                    ]);
+                    
+                    const p1Items = [
+                        { id: 'i1_1', rx: p1Slots[0].rx, ry: p1Slots[0].ry, owner: 1, type: 'conductor', label: 'ตะปู', imgKey: 'nail' },
+                        { id: 'i1_2', rx: p1Slots[1].rx, ry: p1Slots[1].ry, owner: 1, type: 'conductor', label: 'ช้อน', imgKey: 'spoon' },
+                        { id: 'i1_3', rx: p1Slots[2].rx, ry: p1Slots[2].ry, owner: 1, type: 'insulator', label: 'ยางลบ', imgKey: 'eraser' },
+                        { id: 'i1_4', rx: p1Slots[3].rx, ry: p1Slots[3].ry, owner: 1, type: 'insulator', label: 'ท่อนไม้', imgKey: 'wood' }
+                    ];
+
+                    const p2Items = [
+                        { id: 'i2_1', rx: p2Slots[0].rx, ry: p2Slots[0].ry, owner: 2, type: 'conductor', label: 'กุญแจ', imgKey: 'key' },
+                        { id: 'i2_2', rx: p2Slots[1].rx, ry: p2Slots[1].ry, owner: 2, type: 'conductor', label: 'ช้อน', imgKey: 'spoon' },
+                        { id: 'i2_3', rx: p2Slots[2].rx, ry: p2Slots[2].ry, owner: 2, type: 'insulator', label: 'ไม้บรรทัด', imgKey: 'ruler' },
+                        { id: 'i2_4', rx: p2Slots[3].rx, ry: p2Slots[3].ry, owner: 2, type: 'insulator', label: 'ลูกโป่ง', imgKey: 'balloon' }
+                    ];
+
+                    return { targets: t, items: [...p1Items, ...p2Items], statics: [] };
+                }
+            },
+            { // Level 3
+                instruction: "ด่าน 3: จับคู่แหล่งพลังงานเข้ากับเครื่องกำเนิดไฟฟ้า!",
+                knowledge: {
+                    title: "พลังงานสะอาดและการผลิตไฟฟ้า",
+                    content: "พลังงานธรรมชาติ เช่น ลม แสงอาทิตย์ พลังน้ำ สามารถหมุนกังหันหรือใช้เซลล์แสงอาทิตย์เพื่อผลิตไฟฟ้าที่สะอาดได้"
+                },
+                setup: () => {
+                    const t = [
+                        { id: 't1_sun', rx: 0.15, ry: 0.3, owner: 1, type: 'sun', imgKey: 'solarPanel' },
+                        { id: 't1_wind', rx: 0.15, ry: 0.55, owner: 1, type: 'wind', imgKey: 'windTurbine' },
+                        { id: 't1_water', rx: 0.15, ry: 0.8, owner: 1, type: 'water', imgKey: 'hydroDam' },
+                        
+                        { id: 't2_sun', rx: 0.85, ry: 0.3, owner: 2, type: 'sun', imgKey: 'solarPanel' },
+                        { id: 't2_wind', rx: 0.85, ry: 0.55, owner: 2, type: 'wind', imgKey: 'windTurbine' },
+                        { id: 't2_water', rx: 0.85, ry: 0.8, owner: 2, type: 'water', imgKey: 'hydroDam' }
+                    ];
+                    const p1Slots = shuffleArray([{rx: 0.35, ry: 0.3}, {rx: 0.35, ry: 0.55}, {rx: 0.35, ry: 0.8}]);
+                    const p2Slots = shuffleArray([{rx: 0.65, ry: 0.3}, {rx: 0.65, ry: 0.55}, {rx: 0.65, ry: 0.8}]);
+                    
+                    const i = [
+                        { id: 'i1_s', rx: p1Slots[0].rx, ry: p1Slots[0].ry, owner: 1, type: 'sun', label: 'แสงอาทิตย์', imgKey: 'sun' },
+                        { id: 'i1_wi', rx: p1Slots[1].rx, ry: p1Slots[1].ry, owner: 1, type: 'wind', label: 'ลม', imgKey: 'wind' },
+                        { id: 'i1_wa', rx: p1Slots[2].rx, ry: p1Slots[2].ry, owner: 1, type: 'water', label: 'น้ำ', imgKey: 'water' },
+                        
+                        { id: 'i2_s', rx: p2Slots[0].rx, ry: p2Slots[0].ry, owner: 2, type: 'sun', label: 'แสงอาทิตย์', imgKey: 'sun' },
+                        { id: 'i2_wi', rx: p2Slots[1].rx, ry: p2Slots[1].ry, owner: 2, type: 'wind', label: 'ลม', imgKey: 'wind' },
+                        { id: 'i2_wa', rx: p2Slots[2].rx, ry: p2Slots[2].ry, owner: 2, type: 'water', label: 'น้ำ', imgKey: 'water' }
+                    ];
+                    return { targets: t, items: i, statics: [] };
+                }
+            }
+        ];
+
+        function loadLevel(idx) {
+            if (idx >= VS_LEVELS.length) { showVictory(); return; }
+            
+            clearDOMImages();
+            const levelData = VS_LEVELS[idx];
+            const setupData = levelData.setup();
+            
+            state.items = setupData.items.map((item, i) => ({
+                ...item, uniqueId: `item_${i}_${item.id}`,
+                x: item.rx * state.width, y: item.ry * state.height, radius: state.baseRadius, matched: false
+            }));
+
+            state.targets = setupData.targets.map((target, i) => ({
+                ...target, uniqueId: `target_${i}_${target.id}`,
+                x: target.rx * state.width, y: target.ry * state.height, radius: state.baseRadius * 1.5
+            }));
+
+            state.statics = setupData.statics.map((obj, i) => ({
+                ...obj, uniqueId: `static_${i}_${obj.id}`,
+                x: obj.rx * state.width, y: obj.ry * state.height
+            }));
+
+            document.getElementById('level-display').innerText = `ด่าน ${idx + 1}/${VS_LEVELS.length}`;
+            document.getElementById('vs-line').classList.remove('hidden');
+            state.cursors.forEach(c => { c.grabbedItem = null; c.isPinching = false; c.wasPinching = false; });
+        }
+
+        function updateScoreUI() {
+            document.getElementById('score-p1').innerText = state.scores[1];
+            document.getElementById('score-p2').innerText = state.scores[2];
+        }
+
+        function checkLevelComplete() {
+            if (!state.isPlaying) return;
+
+            const p1Items = state.items.filter(i => i.owner === 1);
+            const p2Items = state.items.filter(i => i.owner === 2);
+            let p1Done = p1Items.every(i => i.matched) && p1Items.length > 0;
+            let p2Done = p2Items.every(i => i.matched) && p2Items.length > 0;
+
+            if (p1Done || p2Done) {
+                let winner = p1Done && p2Done ? 0 : (p1Done ? 1 : 2);
+                if (winner === 1) state.scores[1] += 200;
+                else if (winner === 2) state.scores[2] += 200;
+                updateScoreUI();
+                audio.playVictory();
+                
+                // Set winners for statics (e.g. lightbulbs turn yellow)
+                state.statics.forEach(s => {
+                    if (s.imgKey === 'lightbulb') {
+                        if (winner === 0 || s.owner === winner) s.isWinner = true;
+                    }
+                });
+                
+                setTimeout(() => showKnowledgeScreen(winner), 1500);
+            }
+        }
+
+        function processCursors() {
+            if (!state.isPlaying) return;
+
+            state.cursors.forEach(cursor => {
+                if (!cursor.active) { cursor.grabbedItem = null; return; }
+
+                if (cursor.isPinching && !cursor.wasPinching && !cursor.grabbedItem) {
+                    // Try Grab
+                    let closest = null, minDist = Infinity;
+                    state.items.forEach(item => {
+                        if (item.matched) return;
+                        // Prevent stealing from other's zone in L1/L3
+                        if (item.owner !== 0 && item.owner !== cursor.owner) return; 
+                        
+                        // Prevent grab if someone else holds it
+                        if (state.cursors.some(c => c !== cursor && c.grabbedItem === item)) return;
+
+                        let dx = item.x - cursor.x, dy = item.y - cursor.y;
+                        let dist = Math.sqrt(dx*dx + dy*dy);
+                        if (dist < item.radius * 2 && dist < minDist) {
+                            minDist = dist; closest = item;
+                        }
+                    });
+
+                    if (closest) {
+                        cursor.grabbedItem = closest;
+                        cursor.grabOffset = { x: closest.x - cursor.x, y: closest.y - cursor.y };
+                        audio.playGrab();
+                    }
+                } 
+                else if (cursor.isPinching && cursor.grabbedItem) {
+                    // Drag
+                    cursor.grabbedItem.x = cursor.x + cursor.grabOffset.x;
+                    cursor.grabbedItem.y = cursor.y + cursor.grabOffset.y;
+                } 
+                else if (!cursor.isPinching && cursor.wasPinching && cursor.grabbedItem) {
+                    // Drop
+                    let item = cursor.grabbedItem;
+                    cursor.grabbedItem = null;
+                    let droppedOnTarget = false;
+
+                    state.targets.forEach(target => {
+                        if (item.matched) return;
+                        
+                        // Check ownership for targets
+                        if (target.owner !== cursor.owner) return;
+
+                        let dx = target.x - item.x, dy = target.y - item.y;
+                        let dist = Math.sqrt(dx*dx + dy*dy);
+                        
+                        let hitRadius = target.isBin ? target.radius * 1.5 : target.radius;
+
+                        if (dist < hitRadius) {
+                            if (item.type === target.type) {
+                                // Correct Match
+                                item.matched = true;
+                                item.x = target.isBin ? -1000 : target.x; // Hide if bin, snap if target
+                                item.y = target.isBin ? -1000 : target.y;
+                                
+                                state.scores[cursor.owner] += 50;
+                                audio.playCorrect();
+                                droppedOnTarget = true;
+                            } else {
+                                // Wrong Match
+                                state.scores[cursor.owner] -= 20; // Penalty
+                                audio.playWrong();
+                            }
+                            updateScoreUI();
+                        }
+                    });
+
+                    if (!droppedOnTarget) {
+                        audio.playDrop();
+                        // Optional: Return to original spot? 
+                        // For now let it drop where it is.
+                    }
+                    
+                    checkLevelComplete();
+                }
+
+                cursor.wasPinching = cursor.isPinching;
+            });
+        }
+
+        // ==========================================
+        // 5. Rendering
+        // ==========================================
+        function drawCanvas() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            if (!state.isPlaying) return;
+
+            const levelData = VS_LEVELS[state.currentLevelIdx];
+            
+            // Helper to update DOM images (Overlay for Canvas)
+            const updateDOMImg = (id, imgKey, x, y, size, alpha = 1.0) => {
+                if(x < 0) {
+                     if(domImageElements[id]) domImageElements[id].style.display = 'none';
+                     return;
+                }
+                const imgEl = getOrCreateDOMImage(id, imgKey, size);
+                imgEl.style.left = `${x}px`;
+                imgEl.style.top = `${y}px`;
+                imgEl.style.display = 'block';
+                imgEl.style.opacity = alpha;
+                imgEl.style.width = `${size}px`;
+                imgEl.style.height = `${size}px`;
+            };
+
+            // Instruction Text
+            ctx.lineWidth = 4;
+            ctx.lineJoin = 'round';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            
+            ctx.font = 'bold 24px Prompt';
+            ctx.strokeStyle = 'rgba(0, 0, 0, 0.8)';
+            ctx.fillStyle = '#bae6fd';
+            ctx.strokeText(levelData.instruction, state.width / 2, 90);
+            ctx.fillText(levelData.instruction, state.width / 2, 90);
+
+            // Draw Wires (Level 1 specific logic)
+            if (state.currentLevelIdx === 0) {
+                ctx.lineWidth = 4;
+                // P1 Wire
+                let b1 = state.statics.find(s=>s.owner===1 && s.imgKey==='battery');
+                let blb1 = state.statics.find(s=>s.owner===1 && s.imgKey==='lightbulb');
+                let tw1 = state.targets.find(t=>t.id==='t1_wire');
+                let ts1 = state.targets.find(t=>t.id==='t1_switch');
+                if(b1 && blb1 && tw1 && ts1) {
+                    ctx.strokeStyle = blb1.isWinner ? '#fde047' : '#38bdf8';
+                    if (ts1.matched) {
+                        ctx.beginPath(); ctx.moveTo(b1.x, b1.y); ctx.lineTo(ts1.x, b1.y); ctx.lineTo(ts1.x, ts1.y); ctx.stroke();
+                        ctx.beginPath(); ctx.moveTo(ts1.x, ts1.y); ctx.lineTo(ts1.x, blb1.y); ctx.lineTo(blb1.x, blb1.y); ctx.stroke();
+                    }
+                    if (tw1.matched) {
+                        ctx.beginPath(); ctx.moveTo(b1.x, b1.y); ctx.lineTo(tw1.x, b1.y); ctx.lineTo(tw1.x, tw1.y); ctx.stroke();
+                        ctx.beginPath(); ctx.moveTo(tw1.x, tw1.y); ctx.lineTo(tw1.x, blb1.y); ctx.lineTo(blb1.x, blb1.y); ctx.stroke();
+                    }
+                }
+                // P2 Wire
+                let b2 = state.statics.find(s=>s.owner===2 && s.imgKey==='battery');
+                let blb2 = state.statics.find(s=>s.owner===2 && s.imgKey==='lightbulb');
+                let tw2 = state.targets.find(t=>t.id==='t2_wire');
+                let ts2 = state.targets.find(t=>t.id==='t2_switch');
+                if(b2 && blb2 && tw2 && ts2) {
+                    ctx.strokeStyle = blb2.isWinner ? '#fde047' : '#fb7185';
+                    if (ts2.matched) {
+                        ctx.beginPath(); ctx.moveTo(b2.x, b2.y); ctx.lineTo(ts2.x, b2.y); ctx.lineTo(ts2.x, ts2.y); ctx.stroke();
+                        ctx.beginPath(); ctx.moveTo(ts2.x, ts2.y); ctx.lineTo(ts2.x, blb2.y); ctx.lineTo(blb2.x, blb2.y); ctx.stroke();
+                    }
+                    if (tw2.matched) {
+                        ctx.beginPath(); ctx.moveTo(b2.x, b2.y); ctx.lineTo(tw2.x, b2.y); ctx.lineTo(tw2.x, tw2.y); ctx.stroke();
+                        ctx.beginPath(); ctx.moveTo(tw2.x, tw2.y); ctx.lineTo(tw2.x, blb2.y); ctx.lineTo(blb2.x, blb2.y); ctx.stroke();
+                    }
+                }
+            }
+
+            // Statics
+            state.statics.forEach(obj => {
+                if (obj.isWinner) {
+                    ctx.shadowColor = '#fef08a'; ctx.shadowBlur = 40;
+                    ctx.beginPath(); ctx.arc(obj.x, obj.y, state.baseRadius * 2, 0, Math.PI * 2);
+                    ctx.fillStyle = 'rgba(254, 240, 138, 0.5)'; ctx.fill();
+                    ctx.shadowBlur = 0;
+                }
+                updateDOMImg(obj.uniqueId, obj.imgKey, obj.x, obj.y, state.baseRadius * 3.5);
+            });
+
+            // Targets
+            state.targets.forEach(t => {
+                ctx.beginPath();
+                if (t.isBin) {
+                    updateDOMImg(t.uniqueId, t.imgKey, t.x, t.y, t.radius * 3.5);
+                    ctx.arc(t.x, t.y, t.radius * 1.5, 0, Math.PI * 2);
+                    ctx.strokeStyle = t.color; ctx.lineWidth = 3; ctx.stroke();
+                    
+                    ctx.font = 'bold 20px Prompt'; ctx.fillStyle = 'white';
+                    ctx.strokeText(t.label, t.x, t.y - t.radius - 20);
+                    ctx.fillText(t.label, t.x, t.y - t.radius - 20);
+                } else {
+                    ctx.arc(t.x, t.y, t.radius, 0, Math.PI * 2);
+                    const tColor = t.owner === 1 ? '#38bdf8' : '#fb7185';
+                    ctx.strokeStyle = t.matched ? '#4ade80' : tColor;
+                    ctx.lineWidth = t.matched ? 5 : 3;
+                    ctx.setLineDash(t.matched ? [] : [6, 6]);
+                    ctx.stroke(); ctx.setLineDash([]);
+                    
+                    if (t.imgKey) updateDOMImg(t.uniqueId, t.imgKey, t.x, t.y, t.radius * 3.5, t.matched ? 1.0 : 0.3);
+                }
+            });
+
+            // Items
+            state.items.forEach(item => {
+                if (item.x < 0) {
+                     updateDOMImg(item.uniqueId, item.imgKey, item.x, item.y, item.radius * 2.5); // hide
+                     return;
+                }
+                
+                let grabbingCursor = state.cursors.find(c => c.grabbedItem === item);
+                if (grabbingCursor) { ctx.shadowColor = grabbingCursor.color; ctx.shadowBlur = 25; } 
+                else { ctx.shadowBlur = 0; }
+                
+                // Item Glow base
+                ctx.beginPath(); ctx.arc(item.x, item.y, item.radius, 0, Math.PI*2);
+                let bgAlpha = item.owner === 1 ? 'rgba(56, 189, 248, 0.4)' : 
+                              item.owner === 2 ? 'rgba(244, 63, 94, 0.4)' : 'rgba(255,255,255,0.3)';
+                ctx.fillStyle = bgAlpha; ctx.fill();
+                
+                updateDOMImg(item.uniqueId, item.imgKey, item.x, item.y, item.radius * 2.5);
+                ctx.shadowBlur = 0;
+
+                if (item.label && !grabbingCursor && !item.matched) {
+                    // High visibility text
+                    ctx.font = 'bold 18px Prompt';
+                    
+                    // Background pill for text
+                    const txtW = ctx.measureText(item.label).width;
+                    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+                    ctx.roundRect(item.x - txtW/2 - 10, item.y + item.radius + 10, txtW + 20, 26, 13);
+                    ctx.fill();
+
+                    ctx.fillStyle = '#fde047'; 
+                    ctx.strokeStyle = 'black'; ctx.lineWidth = 3;
+                    ctx.strokeText(item.label, item.x, item.y + item.radius + 23);
+                    ctx.fillText(item.label, item.x, item.y + item.radius + 23);
+                }
+            });
+
+            // Cursors
+            state.cursors.forEach(cursor => {
+                if (cursor.active) {
+                    ctx.beginPath();
+                    ctx.arc(cursor.x, cursor.y, 25, 0, Math.PI * 2);
+                    ctx.strokeStyle = cursor.color; ctx.lineWidth = 4;
+                    if(cursor.source === 'ar') ctx.setLineDash([5, 5]); 
+                    ctx.stroke(); ctx.setLineDash([]);
+                    
+                    ctx.beginPath();
+                    ctx.arc(cursor.x, cursor.y, cursor.isPinching ? 12 : 5, 0, Math.PI * 2);
+                    ctx.fillStyle = cursor.isPinching ? cursor.color : 'rgba(255, 255, 255, 0.9)';
+                    ctx.fill();
+                    
+                    ctx.font = 'bold 16px Prompt';
+                    ctx.fillStyle = cursor.color;
+                    ctx.strokeStyle = 'black'; ctx.lineWidth = 3;
+                    ctx.strokeText(`P${cursor.owner}`, cursor.x, cursor.y - 35);
+                    ctx.fillText(`P${cursor.owner}`, cursor.x, cursor.y - 35);
+                }
+            });
+        }
+
+        // Main Loop
+        function gameLoop() {
+            processCursors();
+            drawCanvas();
+            requestAnimationFrame(gameLoop);
+        }
+        requestAnimationFrame(gameLoop);
+
+        // ==========================================
+        // 6. UI Controllers
+        // ==========================================
+        const uiIntro = document.getElementById('screen-intro');
+        const uiKnowledge = document.getElementById('screen-knowledge');
+        const uiVictory = document.getElementById('screen-victory');
+        const hud = document.getElementById('hud');
+
+        document.getElementById('btn-start').addEventListener('click', () => {
+            audio.init(); audio.playClick();
+            uiIntro.classList.add('opacity-0', 'pointer-events-none');
+            setTimeout(() => {
+                uiIntro.classList.add('hidden');
+                hud.classList.remove('hidden');
+                state.currentLevelIdx = 0;
+                state.scores = {1:0, 2:0};
+                updateScoreUI();
+                loadLevel(state.currentLevelIdx);
+                state.isPlaying = true;
+            }, 500);
+        });
+
+        function showKnowledgeScreen(winnerId) {
+            state.isPlaying = false; 
+            clearDOMImages(); 
+            const kl = VS_LEVELS[state.currentLevelIdx].knowledge;
+            
+            let winnerText = "เสมอ!"; let winnerColor = "text-amber-300"; let borderColor = "border-amber-300";
+            if (winnerId === 1) { winnerText = "Player 1 (ซ้าย) ชนะด่านนี้!"; winnerColor = "text-sky-400"; borderColor = "border-sky-400"; }
+            else if (winnerId === 2) { winnerText = "Player 2 (ขวา) ชนะด่านนี้!"; winnerColor = "text-rose-400"; borderColor = "border-rose-400"; }
+            
+            const klWinner = document.getElementById('kl-winner');
+            klWinner.innerText = winnerText;
+            klWinner.className = `text-2xl font-bold mb-4 px-6 py-2 rounded-full border-2 border-dashed shadow-md ${winnerColor} ${borderColor}`;
+            
+            document.getElementById('kl-title').innerText = kl.title;
+            document.getElementById('kl-content').innerText = kl.content;
+            uiKnowledge.classList.remove('hidden');
+        }
+
+        document.getElementById('btn-next-level').addEventListener('click', () => {
+            audio.playClick();
+            uiKnowledge.classList.add('hidden');
+            state.currentLevelIdx++;
+            loadLevel(state.currentLevelIdx);
+            state.isPlaying = true;
+        });
+
+        function showVictory() {
+            hud.classList.add('hidden');
+            document.getElementById('vs-line').classList.add('hidden');
+            clearDOMImages();
+            
+            document.getElementById('final-score-p1').innerText = state.scores[1];
+            document.getElementById('final-score-p2').innerText = state.scores[2];
+            
+            let wText = document.getElementById('final-winner-text');
+            let p1C = document.getElementById('p1-crown');
+            let p2C = document.getElementById('p2-crown');
+            
+            p1C.classList.add('hidden'); p2C.classList.add('hidden');
+            
+            if (state.scores[1] > state.scores[2]) {
+                wText.innerText = "🏆 Player 1 คือผู้ชนะ!"; wText.className = "text-5xl font-bold mb-6 drop-shadow-lg text-sky-400";
+                p1C.classList.remove('hidden');
+            } else if (state.scores[2] > state.scores[1]) {
+                wText.innerText = "🏆 Player 2 คือผู้ชนะ!"; wText.className = "text-5xl font-bold mb-6 drop-shadow-lg text-rose-400";
+                p2C.classList.remove('hidden');
+            } else {
+                wText.innerText = "🤝 เสมอกันยอดเยี่ยม!"; wText.className = "text-5xl font-bold mb-6 drop-shadow-lg text-amber-400";
+                p1C.classList.remove('hidden'); p2C.classList.remove('hidden');
+            }
+            
+            uiVictory.classList.remove('hidden');
+        }
+
+        document.getElementById('btn-restart').addEventListener('click', () => {
+            audio.playClick();
+            uiVictory.classList.add('hidden');
+            hud.classList.remove('hidden');
+            state.currentLevelIdx = 0;
+            state.scores = {1:0, 2:0};
+            updateScoreUI();
+            loadLevel(0);
+            state.isPlaying = true;
+        });
+
+        // ==========================================
+        // 7. Input Management (Mouse/Touch Fallback)
+        // ==========================================
+        function handlePointer(e, isDown) {
+            e.preventDefault();
+            // Assign pointer to P1 or P2 based on X coordinate
+            let cIndex = (e.clientX < state.width / 2) ? 0 : 1; 
+            let c = state.cursors[cIndex];
+            
+            c.active = true;
+            c.source = 'touch';
+            c.x = e.clientX;
+            c.y = e.clientY;
+            c.isPinching = isDown;
+        }
+
+        canvas.addEventListener('mousedown', (e) => handlePointer(e, true));
+        canvas.addEventListener('mousemove', (e) => { if(e.buttons > 0) handlePointer(e, true); else {
+            let cIndex = (e.clientX < state.width/2)?0:1; 
+            state.cursors[cIndex].x = e.clientX; state.cursors[cIndex].y = e.clientY;
+            state.cursors[cIndex].isPinching = false;
+        }});
+        canvas.addEventListener('mouseup', (e) => handlePointer(e, false));
+        canvas.addEventListener('mouseleave', (e) => { state.cursors.forEach(c => c.active = (c.source === 'ar')); });
+
+        canvas.addEventListener('touchstart', (e) => {
+            for(let i=0; i<e.changedTouches.length; i++) handlePointer(e.changedTouches[i], true);
+        }, {passive: false});
+        canvas.addEventListener('touchmove', (e) => {
+            for(let i=0; i<e.changedTouches.length; i++) handlePointer(e.changedTouches[i], true);
+        }, {passive: false});
+        canvas.addEventListener('touchend', (e) => {
+            for(let i=0; i<e.changedTouches.length; i++) handlePointer(e.changedTouches[i], false);
+        });
+
+        // ==========================================
+        // 8. WebAR Engine (Native Video -> MediaPipe)
+        // ==========================================
+        const videoElement = document.getElementById('video-element');
+        const statusText = document.getElementById('input-status');
+        
+        async function setupCamera() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: { width: 1280, height: 720, facingMode: "user" }
+                });
+                videoElement.srcObject = stream;
+                return new Promise((resolve) => {
+                    videoElement.onloadedmetadata = () => { resolve(videoElement); };
+                });
+            } catch (error) {
+                console.warn("Camera denied or unavailable:", error);
+                statusText.innerText = "🔴 ปิดกล้อง (ใช้เมาส์/นิ้วแตะ)";
+                statusText.className = "text-xs text-rose-400 mt-1 font-bold";
+                return null;
+            }
+        }
+
+        const hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
+        hands.setOptions({ maxNumHands: 2, modelComplexity: 1, minDetectionConfidence: 0.6, minTrackingConfidence: 0.5 });
+        
+        hands.onResults((results) => {
+            // Reset AR cursors
+            state.cursors.forEach(c => { if(c.source === 'ar') { c.active = false; c.isPinching = false; }});
+
+            if (results.multiHandLandmarks) {
+                results.multiHandLandmarks.forEach((landmarks, index) => {
+                    let indexTip = landmarks[8];
+                    let thumbTip = landmarks[4];
+
+                    // Map mirrored coordinates
+                    let px = (1 - indexTip.x) * state.width;
+                    let py = indexTip.y * state.height;
+
+                    let dx = (indexTip.x - thumbTip.x) * state.width;
+                    let dy = (indexTip.y - thumbTip.y) * state.height;
+                    let pinchDist = Math.sqrt(dx*dx + dy*dy);
+                    let isPinching = pinchDist < (state.baseRadius * 1.5);
+
+                    // Assign hand to P1 or P2 based on physical side
+                    let cIndex = (px < state.width / 2) ? 0 : 1;
+                    let c = state.cursors[cIndex];
+
+                    c.active = true;
+                    c.source = 'ar';
+                    c.x = px;
+                    c.y = py;
+                    c.isPinching = isPinching;
+                });
+            }
+        });
+
+        // Initialize Native Camera Loop
+        setupCamera().then(video => {
+            if (video) {
+                statusText.innerText = "🟢 กล้องพร้อม (AR Mode)";
+                statusText.className = "text-xs text-emerald-400 mt-1 font-bold";
+                
+                async function arLoop() {
+                    if (video.readyState >= 2) {
+                        await hands.send({image: video});
+                    }
+                    requestAnimationFrame(arLoop);
+                }
+                arLoop();
+            }
+        });
+    </script>
+</body>
+</html>
